@@ -1,0 +1,69 @@
+{
+  "best_model": "Random Forest",
+  "trained_at": "2026-10-01T11:41:49.646193",
+  "dataset_rows": 303,
+  "features": [
+    "age",
+    "sex",
+    "cp",
+    "trestbps",
+    "chol",
+    "fbs",
+    "restecg",
+    "thalach",
+    "exang",
+    "oldpeak",
+    "slope",
+    "ca",
+    "thal"
+  ],
+  "evaluation_metrics": {
+    "accuracy": 0.918,
+    "precision": 0.871,
+    "recall": 0.9643,
+    "f1_score": 0.9153,
+    "roc_auc": 0.9502,
+    "cv_auc_mean": 0.8853
+  },
+  "all_model_benchmarks": {
+    "Random Forest": {
+      "accuracy": 0.918,
+      "precision": 0.871,
+      "recall": 0.9643,
+      "f1_score": 0.9153,
+      "roc_auc": 0.9502,
+      "cv_auc_mean": 0.8853
+    },
+    "Logistic Regression": {
+      "accuracy": 0.8689,
+      "precision": 0.8125,
+      "recall": 0.9286,
+      "f1_score": 0.8667,
+      "roc_auc": 0.9513,
+      "cv_auc_mean": 0.896
+    },
+    "Gradient Boosting": {
+      "accuracy": 0.8361,
+      "precision": 0.7647,
+      "recall": 0.9286,
+      "f1_score": 0.8387,
+      "roc_auc": 0.9491,
+      "cv_auc_mean": 0.8516
+    }
+  },
+  "feature_importances": {
+    "thal": 0.1514,
+    "cp": 0.1444,
+    "ca": 0.1257,
+    "thalach": 0.112,
+    "oldpeak": 0.1075,
+    "age": 0.0798,
+    "exang": 0.0609,
+    "chol": 0.0591,
+    "trestbps": 0.0556,
+    "slope": 0.0479,
+    "sex": 0.0313,
+    "restecg": 0.0164,
+    "fbs": 0.0079
+  }
+}
