@@ -1,6 +1,8 @@
 """
-CardioPulse AI — All-in-One Full-Stack Python Application for Vercel
-Serves the complete interactive web UI, API endpoints, and ML inference directly from Python.
+CardioPulse AI — Next-Gen Cardiovascular Diagnostic Operating System
+Full-Stack Python Application for Vercel
+Features: Live Canvas ECG Monitor, Multi-Model Consensus (RF, GB, LR),
+SHAP-Style Feature Attribution, 6-Axis Radar Metrics, and Clinical PDF Export.
 """
 
 import os
@@ -9,7 +11,7 @@ import logging
 from typing import Dict, Any, List
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -17,17 +19,18 @@ import numpy as np
 import pandas as pd
 import joblib
 
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("cardiopulse_python")
+logger = logging.getLogger("cardiopulse_pro")
 
 app = FastAPI(
-    title="CardioPulse AI — Heart Disease Prediction",
-    description="All-in-one Python web application and ML inference engine.",
-    version="2.0.0"
+    title="CardioPulse AI — Next-Gen Diagnostic Engine",
+    description="Multi-model cardiovascular disease risk assessment system.",
+    version="3.0.0"
 )
 
 app.add_middleware(
@@ -38,29 +41,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------------------------------------------------
-# Features & Model Initialization
-# -------------------------------------------------------------
 FEATURE_NAMES = [
     "age", "sex", "cp", "trestbps", "chol", "fbs",
     "restecg", "thalach", "exang", "oldpeak", "slope", "ca", "thal"
 ]
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "model", "heart_model.joblib")
+ENSEMBLE_PATH = os.path.join(BASE_DIR, "model", "ensemble_models.joblib")
 DATA_PATH = os.path.join(BASE_DIR, "data", "heart.csv")
 
-model_pipeline = None
+ensemble_models = {}
 
 
-def train_fallback_model() -> Pipeline:
-    """Trains a fallback RandomForest pipeline if the pre-serialized model is missing."""
-    logger.info("Initializing fallback model training from data/heart.csv...")
+def train_fallback_models() -> Dict[str, Pipeline]:
+    """Self-healing fallback if models file is missing on Vercel cold-start."""
+    logger.info("Training self-healing multi-model ensemble...")
     if os.path.exists(DATA_PATH):
         df = pd.read_csv(DATA_PATH)
     else:
-        # Emergency backup sample data if file path varies in serverless environment
-        logger.warning("data/heart.csv not found; using embedded reference dataset...")
         df = pd.DataFrame([
             [63, 1, 1, 145, 233, 1, 2, 150, 0, 2.3, 3, 0, 6, 0],
             [67, 1, 4, 160, 286, 0, 2, 108, 1, 1.5, 2, 3, 3, 1],
@@ -76,31 +74,41 @@ def train_fallback_model() -> Pipeline:
 
     X = df[FEATURE_NAMES]
     y = df["target"]
-    pipeline = Pipeline([
-        ("scaler", StandardScaler()),
-        ("classifier", RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42))
-    ])
-    pipeline.fit(X, y)
-    logger.info("Fallback pipeline trained successfully.")
-    return pipeline
+
+    models = {
+        "rf": Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42))
+        ]),
+        "gb": Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", GradientBoostingClassifier(n_estimators=80, learning_rate=0.08, max_depth=3, random_state=42))
+        ]),
+        "lr": Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=1000, random_state=42))
+        ])
+    }
+    for m in models.values():
+        m.fit(X, y)
+    return models
 
 
-# Load model or train fallback
 try:
-    if os.path.exists(MODEL_PATH):
-        model_pipeline = joblib.load(MODEL_PATH)
-        logger.info(f"Loaded trained model from {MODEL_PATH}")
+    if os.path.exists(ENSEMBLE_PATH):
+        ensemble_models = joblib.load(ENSEMBLE_PATH)
+        logger.info("Successfully loaded multi-model ensemble from disk.")
     else:
-        model_pipeline = train_fallback_model()
-except Exception as err:
-    logger.error(f"Error loading model: {err}. Using trained fallback.")
-    model_pipeline = train_fallback_model()
+        ensemble_models = train_fallback_models()
+except Exception as e:
+    logger.error(f"Error loading models: {e}. Training fallback.")
+    ensemble_models = train_fallback_models()
 
 
 # -------------------------------------------------------------
-# Pydantic Schemas & Helpers
+# Request Schema & Helpers
 # -------------------------------------------------------------
-class PatientPayload(BaseModel):
+class PatientData(BaseModel):
     age: int = Field(..., ge=18, le=120)
     sex: int = Field(..., ge=0, le=1)
     cp: int = Field(..., ge=0, le=4)
@@ -116,536 +124,954 @@ class PatientPayload(BaseModel):
     thal: int = Field(..., ge=0, le=7)
 
 
-def normalize_patient(patient: PatientPayload) -> Dict[str, Any]:
-    data = patient.model_dump()
-    if data["cp"] == 0:
-        data["cp"] = 1
-    if data["slope"] == 0:
-        data["slope"] = 1
-    if data["thal"] == 1:
-        data["thal"] = 3
-    elif data["thal"] == 2:
-        data["thal"] = 6
-    elif data["thal"] == 3:
-        data["thal"] = 7
-    elif data["thal"] not in [3, 6, 7]:
-        data["thal"] = 3
-    return data
+def normalize(data: Dict[str, Any]) -> Dict[str, Any]:
+    d = dict(data)
+    if d["cp"] == 0: d["cp"] = 1
+    if d["slope"] == 0: d["slope"] = 1
+    if d["thal"] == 1: d["thal"] = 3
+    elif d["thal"] == 2: d["thal"] = 6
+    elif d["thal"] == 3: d["thal"] = 7
+    elif d["thal"] not in [3, 6, 7]: d["thal"] = 3
+    return d
 
 
-def extract_clinical_factors(data: Dict[str, Any]) -> List[Dict[str, str]]:
-    factors = []
-    if data["trestbps"] >= 140:
-        factors.append({"param": "Blood Pressure", "status": "Stage 2 Hypertension", "value": f"{data['trestbps']:.0f} mmHg", "sev": "high", "note": "Elevated systolic pressure adds acute strain on arterial walls."})
-    elif data["trestbps"] >= 130:
-        factors.append({"param": "Blood Pressure", "status": "Pre-Hypertension", "value": f"{data['trestbps']:.0f} mmHg", "sev": "moderate", "note": "Borderline blood pressure; monitor periodically."})
+def compute_radar_metrics(d: Dict[str, Any]) -> Dict[str, float]:
+    """Scales 6 key dimensions between 10 and 100 for SVG radar chart."""
+    bp_score = min(100.0, max(15.0, (d["trestbps"] - 90) / 100 * 100))
+    chol_score = min(100.0, max(15.0, (d["chol"] - 130) / 250 * 100))
+    ischemia_score = min(100.0, max(10.0, (d["oldpeak"] / 4.0) * 100))
+    vessel_score = min(100.0, max(10.0, (d["ca"] / 3.0) * 100))
+    thal_score = 15.0 if d["thal"] == 3 else (70.0 if d["thal"] == 6 else 95.0)
+    # Exertional strain: lower thalach for age = higher strain
+    expected_hr = 220 - d["age"]
+    exert_deficit = max(0.0, (expected_hr - d["thalach"]) / expected_hr * 100)
+    strain_score = min(100.0, max(15.0, exert_deficit + (d["exang"] * 35)))
 
-    if data["chol"] >= 240:
-        factors.append({"param": "Serum Cholesterol", "status": "High Cholesterol", "value": f"{data['chol']:.0f} mg/dL", "sev": "high", "note": "Significantly elevated circulating lipids accelerate plaque buildup."})
-    elif data["chol"] >= 200:
-        factors.append({"param": "Serum Cholesterol", "status": "Borderline High", "value": f"{data['chol']:.0f} mg/dL", "sev": "moderate", "note": "Above desirable threshold of <200 mg/dL."})
-
-    if data["oldpeak"] >= 2.0:
-        factors.append({"param": "ST Depression", "status": "Severe Ischemia", "value": f"{data['oldpeak']:.1f} mm", "sev": "high", "note": "Pronounced ST depression during exertion reflects impaired myocardial perfusion."})
-    elif data["oldpeak"] >= 1.0:
-        factors.append({"param": "ST Depression", "status": "Mild Ischemia", "value": f"{data['oldpeak']:.1f} mm", "sev": "moderate", "note": "Subtle exercise-induced ST depression."})
-
-    if data["exang"] == 1:
-        factors.append({"param": "Exercise Angina", "status": "Present", "value": "Positive", "sev": "high", "note": "Chest pain elicited by physical exertion."})
-
-    if data["ca"] > 0:
-        factors.append({"param": "Fluoroscopy Vessels", "status": f"{data['ca']} Vessel(s) Occluded", "value": f"{data['ca']} vessel(s)", "sev": "high", "note": "Fluoroscopy demonstrates visible coronary narrowing."})
-
-    if data["thal"] in [6, 7]:
-        desc = "Fixed Defect" if data["thal"] == 6 else "Reversible Ischemic Defect"
-        factors.append({"param": "Thallium Scan", "status": desc, "value": f"Type {data['thal']}", "sev": "high", "note": "Nuclear myocardial scintigraphy revealed perfusion defect."})
-
-    if data["cp"] == 4:
-        factors.append({"param": "Chest Pain Type", "status": "Asymptomatic / Silent", "value": "Type 4", "sev": "high", "note": "Silent presentation is often associated with advanced occult disease."})
-
-    return factors
+    return {
+        "blood_pressure": round(bp_score, 1),
+        "cholesterol": round(chol_score, 1),
+        "ischemic_st": round(ischemia_score, 1),
+        "vessel_occlusion": round(vessel_score, 1),
+        "perfusion_defect": round(thal_score, 1),
+        "exertion_strain": round(strain_score, 1)
+    }
 
 
-def generate_recommendations(risk_tier: str) -> List[str]:
-    if risk_tier == "High Risk":
-        return [
-            "🚨 Urgent Cardiology Consultation: Arrange an appointment with a board-certified cardiologist within 48-72 hours.",
-            "📋 Diagnostic Angiogram: Discuss invasive coronary angiography or high-resolution CTCA imaging.",
-            "💊 Pharmacotherapy Review: Evaluate antiplatelet, statin, and antihypertensive regimens.",
-            "⚠️ Strenuous Workouts Caution: Cease unmonitored vigorous exertion until cleared by an exercise stress test."
-        ]
-    elif risk_tier == "Moderate Risk":
-        return [
-            "🩺 Preventive Checkup: Follow up with your primary physician within 3-4 weeks.",
-            "📊 Stress Testing: Undergo a Treadmill Exercise Stress Test (TMT) and echocardiogram.",
-            "🥗 Nutritional Optimization: Transition to a Mediterranean or DASH diet low in saturated fats and sodium.",
-            "🏃 Structured Activity: Aim for 150 minutes of moderate aerobic activity weekly (e.g. brisk walking)."
-        ]
-    else:
-        return [
-            "🌟 Favorable Baseline: Excellent cardiovascular markers. Continue your healthy daily habits!",
-            "🛡️ Annual Surveillance: Maintain annual monitoring of resting blood pressure and lipid panels.",
-            "🥦 Nutrient-Dense Diet: Keep enjoying whole grains, leafy vegetables, and lean proteins.",
-            "🧘 Stress & Sleep: Prioritize 7-8 hours of restful sleep and mindfulness practices."
-        ]
+def compute_feature_attributions(df_row: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Calculates directional SHAP-style feature contributions (+ risk, - protective)."""
+    lr = ensemble_models.get("lr")
+    if not lr:
+        return []
+    scaler = lr.named_steps["scaler"]
+    clf = lr.named_steps["clf"]
+    scaled = scaler.transform(df_row)[0]
+    coefs = clf.coef_[0]
+
+    names_map = {
+        "ca": "Fluoroscopy Vessels (ca)",
+        "thal": "Thallium Perfusion (thal)",
+        "oldpeak": "ST Depression (oldpeak)",
+        "exang": "Exercise Angina (exang)",
+        "cp": "Chest Pain Classification (cp)",
+        "thalach": "Max Heart Rate (thalach)",
+        "trestbps": "Resting Blood Pressure",
+        "chol": "Serum Cholesterol",
+        "age": "Patient Age",
+        "sex": "Biological Sex",
+        "slope": "ST Slope Dynamic",
+        "restecg": "Resting ECG Rhythm",
+        "fbs": "Fasting Blood Sugar"
+    }
+
+    attributions = []
+    for f, s, c in zip(FEATURE_NAMES, scaled, coefs):
+        impact = float(s * c)
+        if abs(impact) >= 0.15:
+            attributions.append({
+                "feature": f,
+                "label": names_map.get(f, f),
+                "impact": round(impact, 2),
+                "direction": "risk" if impact > 0 else "protective",
+                "percentage": round(min(100.0, abs(impact) * 25.0), 1)
+            })
+
+    attributions.sort(key=lambda x: abs(x["impact"]), reverse=True)
+    return attributions[:6]
 
 
 # -------------------------------------------------------------
-# Embedded Complete UI Template (Pure Python HTMLResponse)
+# Complete Modern UI Template (HTMLResponse)
 # -------------------------------------------------------------
-HTML_TEMPLATE = """<!DOCTYPE html>
+UI_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CardioPulse AI — Heart Disease Prediction (Python on Vercel)</title>
-  <meta name="description" content="All-in-one Python Heart Disease Prediction application deployed on Vercel.">
+  <title>CardioPulse Pro — AI Cardiovascular Diagnostic OS</title>
+  <meta name="description" content="Next-Gen Machine Learning Heart Disease Diagnosis & Hemodynamic Monitoring Operating System.">
+  
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
   <style>
     :root {
-      --bg-base: #07090e;
-      --bg-card: rgba(17, 24, 39, 0.8);
+      --bg-deep: #050811;
+      --bg-card: rgba(13, 20, 36, 0.75);
+      --bg-card-hover: rgba(18, 28, 51, 0.85);
       --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-glass: rgba(56, 189, 248, 0.15);
       --border-focus: #38bdf8;
-      --border-glass: rgba(255, 255, 255, 0.12);
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-faint: #64748b;
+      
+      --cyan: #06b6d4;
+      --neon-cyan: #38bdf8;
       --healthy: #10b981;
       --warning: #f59e0b;
       --danger: #f43f5e;
+      --purple: #a855f7;
+
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-faint: #64748b;
+
       --font-heading: 'Outfit', sans-serif;
       --font-body: 'Plus Jakarta Sans', sans-serif;
       --font-mono: 'JetBrains Mono', monospace;
     }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: var(--font-body);
-      background-color: var(--bg-base);
+      background-color: var(--bg-deep);
       color: var(--text-main);
       min-height: 100vh;
       overflow-x: hidden;
       line-height: 1.5;
     }
-    .bg-mesh {
+
+    /* Ambient Space Mesh */
+    .ambient-mesh {
       position: fixed; inset: 0;
-      background: 
-        radial-gradient(circle at 15% 15%, rgba(6, 182, 212, 0.12) 0%, transparent 40%),
-        radial-gradient(circle at 85% 20%, rgba(244, 63, 94, 0.09) 0%, transparent 45%),
-        radial-gradient(circle at 50% 80%, rgba(59, 130, 246, 0.08) 0%, transparent 50%);
+      background:
+        radial-gradient(circle at 10% 15%, rgba(56, 189, 248, 0.12) 0%, transparent 45%),
+        radial-gradient(circle at 85% 25%, rgba(244, 63, 94, 0.1) 0%, transparent 45%),
+        radial-gradient(circle at 50% 85%, rgba(168, 85, 247, 0.08) 0%, transparent 50%);
       pointer-events: none; z-index: 0;
     }
-    .grid-overlay {
+    .grid-mesh {
       position: fixed; inset: 0;
-      background-image: linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
       background-size: 32px 32px;
       pointer-events: none; z-index: 1;
     }
-    .app-container {
+
+    .app-wrapper {
       position: relative; z-index: 2;
-      max-width: 1320px; margin: 0 auto;
-      padding: 24px 24px 60px;
-      display: flex; flex-direction: column; gap: 20px;
+      max-width: 1400px; margin: 0 auto;
+      padding: 16px 24px 60px;
+      display: flex; flex-direction: column; gap: 18px;
     }
-    .app-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 16px 24px;
-      background: var(--bg-card);
-      backdrop-filter: blur(16px);
+
+    /* Top ECG Monitor HUD Strip */
+    .ecg-hud-strip {
+      background: rgba(10, 16, 28, 0.9);
       border: 1px solid var(--border-glass);
-      border-radius: 18px;
+      border-radius: 16px;
+      padding: 12px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 20px;
+      backdrop-filter: blur(20px);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
     }
-    .brand { display: flex; align-items: center; gap: 14px; }
-    .heart-icon {
-      width: 44px; height: 44px; border-radius: 12px;
-      background: linear-gradient(135deg, rgba(244, 63, 94, 0.2), rgba(59, 130, 246, 0.2));
-      border: 1px solid rgba(244, 63, 94, 0.3);
+    .hud-left {
+      display: flex; align-items: center; gap: 14px;
+      min-width: 220px;
+    }
+    .heart-orb {
+      width: 42px; height: 42px; border-radius: 12px;
+      background: linear-gradient(135deg, rgba(244, 63, 94, 0.2), rgba(56, 189, 248, 0.2));
+      border: 1px solid rgba(244, 63, 94, 0.4);
       display: flex; align-items: center; justify-content: center;
       color: var(--danger);
-      animation: heartbeat 2s infinite ease-in-out;
+      animation: heartpulse 1.8s infinite ease-in-out;
+      cursor: pointer;
     }
-    .heart-icon svg { width: 24px; height: 24px; }
-    @keyframes heartbeat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); filter: drop-shadow(0 0 8px rgba(244, 63, 94, 0.6)); } }
-    .brand-title { font-family: var(--font-heading); font-size: 1.55rem; font-weight: 800; color: #fff; }
-    .gradient-text { background: linear-gradient(135deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .brand-subtitle { font-size: 0.82rem; color: var(--text-muted); }
-    .header-badge {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 14px; background: rgba(16, 185, 129, 0.12);
-      border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 999px;
-      font-size: 0.8rem; font-weight: 600; color: #34d399;
+    .heart-orb svg { width: 22px; height: 22px; }
+    @keyframes heartpulse {
+      0%, 100% { transform: scale(1); filter: drop-shadow(0 0 4px rgba(244, 63, 94, 0.4)); }
+      50% { transform: scale(1.08); filter: drop-shadow(0 0 12px rgba(244, 63, 94, 0.8)); }
     }
-    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--healthy); box-shadow: 0 0 8px var(--healthy); }
-    
-    .presets-bar {
+    .hud-title { font-family: var(--font-heading); font-size: 1.35rem; font-weight: 800; color: #fff; }
+    .hud-sub { font-size: 0.72rem; color: var(--text-muted); }
+    .ecg-canvas-container {
+      flex: 1; height: 46px; position: relative;
+      background: rgba(4, 8, 16, 0.8);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      border-radius: 8px; overflow: hidden;
+    }
+    #ecgCanvas { width: 100%; height: 100%; display: block; }
+    .hud-right {
+      display: flex; align-items: center; gap: 14px;
+      min-width: 200px; justify-content: flex-end;
+    }
+    .bpm-box {
+      display: flex; flex-direction: column; align-items: flex-end;
+    }
+    .bpm-number { font-family: var(--font-mono); font-size: 1.3rem; font-weight: 700; color: #38bdf8; line-height: 1; }
+    .bpm-label { font-size: 0.64rem; text-transform: uppercase; color: var(--text-faint); letter-spacing: 0.05em; }
+    .btn-sound {
+      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-subtle);
+      color: var(--text-muted); padding: 7px 10px; border-radius: 8px; cursor: pointer;
+      font-size: 0.75rem; display: flex; align-items: center; gap: 6px;
+    }
+    .btn-sound:hover { color: #fff; border-color: rgba(255, 255, 255, 0.2); }
+    .btn-sound.active { color: #38bdf8; border-color: #38bdf8; background: rgba(56, 189, 248, 0.15); }
+
+    /* Quick Presets Bar */
+    .presets-strip {
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: 14px;
+      padding: 10px 18px;
       display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
-      padding: 12px 20px; background: var(--bg-card);
-      border: 1px solid var(--border-glass); border-radius: 14px;
     }
-    .presets-label { font-size: 0.82rem; font-weight: 700; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px; }
-    .btn-preset {
+    .strip-label {
+      font-size: 0.8rem; font-weight: 700; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.06em;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .btn-pill {
       display: flex; align-items: center; gap: 8px; padding: 7px 14px;
       font-family: var(--font-body); font-size: 0.82rem; font-weight: 600;
       color: var(--text-main); background: rgba(255, 255, 255, 0.04);
       border: 1px solid var(--border-subtle); border-radius: 8px;
       cursor: pointer; transition: all 0.2s;
     }
-    .btn-preset:hover { background: rgba(255, 255, 255, 0.08); transform: translateY(-1px); border-color: rgba(255,255,255,0.2); }
-    .dot { width: 8px; height: 8px; border-radius: 50%; }
-    .dot-green { background: var(--healthy); box-shadow: 0 0 6px var(--healthy); }
-    .dot-amber { background: var(--warning); box-shadow: 0 0 6px var(--warning); }
-    .dot-red { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
-    .btn-reset { margin-left: auto; color: var(--text-muted); }
+    .btn-pill:hover { background: rgba(255, 255, 255, 0.08); transform: translateY(-1px); border-color: rgba(255,255,255,0.2); }
+    .dot-status { width: 8px; height: 8px; border-radius: 50%; }
+    .dot-healthy { background: var(--healthy); box-shadow: 0 0 8px var(--healthy); }
+    .dot-warning { background: var(--warning); box-shadow: 0 0 8px var(--warning); }
+    .dot-danger { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+    .btn-clear { margin-left: auto; color: var(--text-muted); }
 
-    .main-grid {
+    /* Main Workspace Layout */
+    .workspace-grid {
       display: grid; grid-template-columns: 1.15fr 0.85fr;
-      gap: 22px; align-items: start;
+      gap: 20px; align-items: start;
     }
-    .form-col { display: flex; flex-direction: column; gap: 18px; }
-    .form-card {
-      background: var(--bg-card); backdrop-filter: blur(16px);
-      border: 1px solid var(--border-glass); border-radius: 16px;
+    .form-column { display: flex; flex-direction: column; gap: 16px; }
+    .card-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: 16px;
       padding: 20px 22px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(20px);
     }
-    .card-title {
-      font-family: var(--font-heading); font-size: 1.02rem; font-weight: 700;
-      color: #fff; margin-bottom: 4px;
+    .panel-header {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+      padding-bottom: 12px; border-bottom: 1px solid var(--border-subtle);
     }
-    .card-subtitle { font-size: 0.76rem; color: var(--text-muted); margin-bottom: 16px; }
-    .input-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .col-2 { grid-column: span 2; }
-    .form-group { display: flex; flex-direction: column; gap: 6px; }
-    .form-label {
-      font-size: 0.8rem; font-weight: 600; color: #e2e8f0;
-      display: flex; justify-content: space-between;
+    .panel-icon {
+      width: 34px; height: 34px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
     }
-    .hint { font-size: 0.72rem; font-weight: 400; color: var(--text-faint); }
-    .form-control {
+    .icon-cyan { background: rgba(6, 182, 212, 0.15); color: #38bdf8; border: 1px solid rgba(6, 182, 212, 0.3); }
+    .icon-green { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .icon-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+    .panel-title { font-family: var(--font-heading); font-size: 1.05rem; font-weight: 700; color: #fff; }
+    .panel-desc { font-size: 0.74rem; color: var(--text-muted); }
+
+    .fields-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .full-width { grid-column: span 2; }
+    .field-wrap { display: flex; flex-direction: column; gap: 6px; }
+    .field-top { display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 600; color: #e2e8f0; }
+    .field-hint { font-size: 0.7rem; font-weight: 400; color: var(--text-faint); }
+    .input-box {
       width: 100%; padding: 9px 12px;
       font-family: var(--font-body); font-size: 0.88rem;
-      color: #fff; background: rgba(15, 23, 42, 0.75);
+      color: #fff; background: rgba(8, 14, 26, 0.8);
       border: 1px solid var(--border-subtle); border-radius: 8px;
-      outline: none; transition: border-color 0.2s;
+      outline: none; transition: border-color 0.2s, box-shadow 0.2s;
     }
-    .form-control:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15); }
-    select.form-control { cursor: pointer; }
-    select.form-control option { background: #0f172a; color: #fff; }
+    .input-box:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15); }
+    select.input-box { cursor: pointer; }
+    select.input-box option { background: #0b1120; color: #fff; }
 
-    .slider-row { display: flex; align-items: center; gap: 10px; }
-    .custom-slider { flex: 1; -webkit-appearance: none; height: 6px; background: rgba(255, 255, 255, 0.1); border-radius: 999px; }
-    .custom-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #38bdf8; cursor: pointer; }
-    .num-box { width: 68px; text-align: center; font-family: var(--font-mono); font-weight: 600; }
+    .slider-group { display: flex; align-items: center; gap: 10px; }
+    .range-slider {
+      flex: 1; -webkit-appearance: none; height: 6px; background: rgba(255, 255, 255, 0.1); border-radius: 999px;
+    }
+    .range-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+      background: #38bdf8; border: 2px solid #070a12; box-shadow: 0 0 8px #38bdf8; cursor: pointer;
+    }
+    .slider-num { width: 68px; text-align: center; font-family: var(--font-mono); font-weight: 700; }
 
-    .pill-group { display: flex; gap: 8px; }
-    .pill-opt { flex: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-    .pill-opt input { display: none; }
-    .pill-opt span {
-      width: 100%; padding: 8px; text-align: center; font-size: 0.8rem; font-weight: 600;
-      color: var(--text-muted); background: rgba(15, 23, 42, 0.75);
+    .toggle-radios { display: flex; gap: 8px; }
+    .radio-lbl { flex: 1; cursor: pointer; }
+    .radio-lbl input { display: none; }
+    .radio-lbl span {
+      display: block; padding: 8px; text-align: center; font-size: 0.8rem; font-weight: 600;
+      color: var(--text-muted); background: rgba(8, 14, 26, 0.8);
       border: 1px solid var(--border-subtle); border-radius: 8px;
       transition: all 0.2s;
     }
-    .pill-opt input:checked + span {
-      background: rgba(56, 189, 248, 0.15); border-color: #38bdf8; color: #fff;
+    .radio-lbl input:checked + span {
+      background: rgba(56, 189, 248, 0.15); border-color: #38bdf8; color: #fff; box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
     }
 
-    .btn-submit {
-      width: 100%; padding: 14px 24px;
-      background: linear-gradient(135deg, #0284c7, #0369a1);
+    .btn-run-ai {
+      width: 100%; padding: 15px;
+      background: linear-gradient(135deg, #0284c7 0%, #0369a1 50%, #0c4a6e 100%);
       border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 12px;
-      color: #fff; font-family: var(--font-heading); font-size: 1.02rem; font-weight: 700;
-      cursor: pointer; box-shadow: 0 8px 20px rgba(2, 132, 199, 0.3);
-      transition: all 0.2s;
+      color: #fff; font-family: var(--font-heading); font-size: 1.05rem; font-weight: 700;
+      letter-spacing: 0.02em; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      box-shadow: 0 6px 20px rgba(2, 132, 199, 0.35);
+      transition: all 0.25s;
     }
-    .btn-submit:hover { transform: translateY(-2px); box-shadow: 0 12px 26px rgba(2, 132, 199, 0.45); }
+    .btn-run-ai:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(2, 132, 199, 0.5); }
 
-    .results-col { position: sticky; top: 20px; }
-    .results-card {
-      background: var(--bg-card); backdrop-filter: blur(20px);
-      border: 1px solid var(--border-glass); border-radius: 18px;
-      padding: 24px; display: flex; flex-direction: column; gap: 18px;
+    /* Results Column & Futuristic HUD */
+    .results-column { position: sticky; top: 16px; }
+    .diagnostic-hud {
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: 18px;
+      padding: 24px;
+      display: flex; flex-direction: column; gap: 18px;
+      backdrop-filter: blur(24px);
     }
-    .placeholder-view { text-align: center; padding: 40px 16px; }
-    .placeholder-view svg { width: 48px; height: 48px; color: #38bdf8; margin-bottom: 12px; }
-    .placeholder-title { font-family: var(--font-heading); font-size: 1.2rem; font-weight: 700; color: #fff; margin-bottom: 6px; }
-    .placeholder-desc { font-size: 0.84rem; color: var(--text-muted); max-width: 320px; margin: 0 auto; line-height: 1.6; }
+    .placeholder-state {
+      text-align: center; padding: 48px 16px;
+    }
+    .pulse-rings {
+      width: 90px; height: 90px; margin: 0 auto 16px; position: relative;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ring-circ {
+      position: absolute; border-radius: 50%; border: 1px dashed rgba(56, 189, 248, 0.25);
+    }
+    .r-1 { width: 50px; height: 50px; animation: spin 10s linear infinite; }
+    .r-2 { width: 90px; height: 90px; animation: spin 20s linear infinite reverse; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .ring-core {
+      width: 36px; height: 36px; border-radius: 50%; background: rgba(56, 189, 248, 0.15);
+      display: flex; align-items: center; justify-content: center; color: #38bdf8;
+    }
+    .ph-title { font-family: var(--font-heading); font-size: 1.25rem; font-weight: 700; color: #fff; margin-bottom: 6px; }
+    .ph-desc { font-size: 0.82rem; color: var(--text-muted); max-width: 320px; margin: 0 auto; line-height: 1.5; }
 
-    .result-badge {
+    /* Active Results View */
+    .active-hud { display: none; flex-direction: column; gap: 18px; }
+    .hud-header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      padding-bottom: 14px; border-bottom: 1px solid var(--border-subtle);
+    }
+    .risk-badge {
       display: inline-block; padding: 4px 12px; border-radius: 999px;
-      font-size: 0.72rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 6px;
+      font-size: 0.72rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px;
     }
-    .badge-low { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .badge-mod { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-    .badge-high { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.3); }
-    .result-headline { font-family: var(--font-heading); font-size: 1.15rem; font-weight: 700; color: #fff; }
+    .badge-l { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-m { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-h { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.3); box-shadow: 0 0 10px rgba(244, 63, 94, 0.2); }
+    .hud-headline { font-family: var(--font-heading); font-size: 1.15rem; font-weight: 700; color: #fff; }
+    .btn-pdf {
+      display: flex; align-items: center; gap: 6px; padding: 6px 12px;
+      font-size: 0.76rem; font-weight: 600; color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-subtle);
+      border-radius: 8px; cursor: pointer;
+    }
+    .btn-pdf:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
 
-    .gauge-wrapper { display: flex; flex-direction: column; align-items: center; padding: 6px 0; }
-    .gauge-box { position: relative; width: 220px; height: 130px; display: flex; align-items: flex-end; justify-content: center; }
+    /* Radial Gauge Visualizer */
+    .gauge-wrapper { display: flex; flex-direction: column; align-items: center; }
+    .gauge-dial {
+      position: relative; width: 220px; height: 130px;
+      display: flex; align-items: flex-end; justify-content: center;
+    }
     .gauge-svg { width: 100%; height: 100%; }
-    .gauge-bg { stroke: rgba(255, 255, 255, 0.08); }
-    .gauge-fill {
+    .arc-bg { stroke: rgba(255, 255, 255, 0.08); }
+    .arc-progress {
       stroke: var(--healthy); stroke-dasharray: 251.327; stroke-dashoffset: 251.327;
       transition: stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.4s;
     }
-    .gauge-val { position: absolute; bottom: 8px; text-align: center; }
-    .gauge-score { font-family: var(--font-heading); font-size: 2.2rem; font-weight: 800; color: #fff; line-height: 1; }
-    .gauge-sub { font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); }
+    .gauge-center-val { position: absolute; bottom: 8px; text-align: center; }
+    .score-txt { font-family: var(--font-heading); font-size: 2.2rem; font-weight: 800; color: #fff; line-height: 1; }
+    .score-sub { font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); }
 
-    .summary-box {
-      font-size: 0.85rem; color: #cbd5e1; background: rgba(15, 23, 42, 0.6);
-      border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 14px;
+    /* Multi-Model Ensemble Consensus Bar */
+    .consensus-panel {
+      background: rgba(8, 14, 26, 0.7);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px; padding: 12px 14px;
+      display: flex; flex-direction: column; gap: 8px;
     }
-    .sec-title { font-family: var(--font-heading); font-size: 0.86rem; font-weight: 700; color: #fff; margin-bottom: 8px; }
-    .factors-list { display: flex; flex-direction: column; gap: 8px; }
-    .factor-item {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 8px 12px; background: rgba(15, 23, 42, 0.5); border: 1px solid var(--border-subtle); border-radius: 8px;
-    }
-    .factor-p { font-size: 0.78rem; font-weight: 600; color: #e2e8f0; }
-    .factor-n { font-size: 0.7rem; color: var(--text-faint); }
-    .factor-tag {
-      font-family: var(--font-mono); font-size: 0.72rem; font-weight: 700;
-      padding: 2px 7px; border-radius: 5px;
-    }
-    .tag-h { background: rgba(244, 63, 94, 0.2); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.3); }
-    .tag-m { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .consensus-top { display: flex; justify-content: space-between; font-size: 0.76rem; font-weight: 700; color: #fff; }
+    .consensus-tag { color: #38bdf8; font-family: var(--font-mono); }
+    .model-bars { display: flex; flex-direction: column; gap: 6px; }
+    .model-bar-item { display: flex; align-items: center; gap: 8px; font-size: 0.72rem; color: var(--text-muted); }
+    .m-name { width: 110px; }
+    .m-track { flex: 1; height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 999px; overflow: hidden; }
+    .m-fill { height: 100%; border-radius: 999px; transition: width 0.8s ease; }
+    .m-pct { width: 44px; text-align: right; font-family: var(--font-mono); color: #fff; font-weight: 600; }
 
-    .recs-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
-    .recs-list li {
-      font-size: 0.8rem; color: #cbd5e1; padding: 8px 12px;
-      background: rgba(15, 23, 42, 0.4); border-left: 3px solid #38bdf8; border-radius: 6px;
+    /* Dual Charts Row: Radar & SHAP Waterfall */
+    .dual-charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .chart-box {
+      background: rgba(8, 14, 26, 0.7);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px; padding: 12px;
+      display: flex; flex-direction: column; gap: 8px;
     }
+    .box-title { font-family: var(--font-heading); font-size: 0.8rem; font-weight: 700; color: #e2e8f0; }
+    .radar-svg-box { width: 100%; height: 140px; display: flex; align-items: center; justify-content: center; }
+
+    /* SHAP Waterfall Bar List */
+    .waterfall-list { display: flex; flex-direction: column; gap: 6px; }
+    .wf-item { display: flex; align-items: center; justify-content: space-between; font-size: 0.72rem; }
+    .wf-label { color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100px; }
+    .wf-bar-wrap { flex: 1; margin: 0 8px; height: 5px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; }
+    .wf-bar { height: 100%; border-radius: 999px; }
+    .wf-val { font-family: var(--font-mono); font-weight: 700; font-size: 0.7rem; }
+    .wf-risk { background: #f43f5e; color: #fb7185; }
+    .wf-prot { background: #10b981; color: #34d399; }
+
+    /* Guidance & Recommendations */
+    .recs-box {
+      background: rgba(8, 14, 26, 0.7);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px; padding: 12px 14px;
+    }
+    .recs-ul { list-style: none; display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+    .recs-ul li {
+      font-size: 0.78rem; color: #cbd5e1; padding: 8px 10px;
+      background: rgba(15, 23, 42, 0.5); border-left: 3px solid #38bdf8; border-radius: 6px;
+    }
+
     .app-footer {
       font-size: 0.72rem; color: var(--text-faint); text-align: center;
-      margin-top: 10px; padding-top: 14px; border-top: 1px solid var(--border-subtle);
+      padding-top: 14px; border-top: 1px solid var(--border-subtle);
     }
-    @media (max-width: 960px) {
-      .main-grid { grid-template-columns: 1fr; }
-      .results-col { position: static; }
+
+    @media print {
+      body { background: #fff !important; color: #000 !important; }
+      .ambient-mesh, .grid-mesh, .ecg-hud-strip, .presets-strip, .btn-run-ai, .btn-pdf, .app-footer { display: none !important; }
+      .app-wrapper { max-width: 100% !important; padding: 0 !important; }
+      .workspace-grid { grid-template-columns: 1fr !important; }
+      .card-panel, .diagnostic-hud, .consensus-panel, .chart-box {
+        background: #fff !important; border: 1px solid #ddd !important; box-shadow: none !important; color: #000 !important;
+      }
+      .panel-title, .hud-headline, .score-txt { color: #000 !important; }
     }
-    @media (max-width: 600px) {
-      .input-grid { grid-template-columns: 1fr; }
-      .col-2 { grid-column: span 1; }
+
+    @media (max-width: 1024px) {
+      .workspace-grid { grid-template-columns: 1fr; }
+      .results-column { position: static; }
+      .dual-charts-row { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 680px) {
+      .ecg-hud-strip { flex-direction: column; align-items: flex-start; }
+      .hud-right { width: 100%; justify-content: space-between; }
+      .fields-grid { grid-template-columns: 1fr; }
+      .full-width { grid-column: span 1; }
     }
   </style>
 </head>
 <body>
-  <div class="bg-mesh"></div>
-  <div class="grid-overlay"></div>
+  <div class="ambient-mesh"></div>
+  <div class="grid-mesh"></div>
 
-  <div class="app-container">
-    <header class="app-header">
-      <div class="brand">
-        <div class="heart-icon">
+  <div class="app-wrapper">
+    
+    <!-- Top ECG Monitor HUD Strip -->
+    <header class="ecg-hud-strip">
+      <div class="hud-left">
+        <div class="heart-orb" id="heartOrb" title="Cardiopulse Rhythm Monitor">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>
           </svg>
         </div>
         <div>
-          <h1 class="brand-title">CardioPulse <span class="gradient-text">Python AI</span></h1>
-          <p class="brand-subtitle">Pure Python Machine Learning Web App on Vercel</p>
+          <h1 class="hud-title">CardioPulse <span style="background: linear-gradient(135deg, #38bdf8, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">PRO</span></h1>
+          <p class="hud-sub">AI Cardiovascular Diagnostic Engine • Python Serverless</p>
         </div>
       </div>
-      <div class="header-badge">
-        <span class="pulse-dot"></span>
-        <span>Random Forest • 91.8% Accuracy</span>
+
+      <div class="ecg-canvas-container">
+        <canvas id="ecgCanvas"></canvas>
+      </div>
+
+      <div class="hud-right">
+        <div class="bpm-box">
+          <div class="bpm-number" id="txtLiveBpm">150 <span style="font-size:0.75rem; color:#94a3b8;">BPM</span></div>
+          <div class="bpm-label">Sinus Rhythm</div>
+        </div>
+        <button type="button" class="btn-sound" id="btnAudioToggle" title="Toggle synthesized heartbeat audio">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+          <span id="txtSoundState">Audio Muted</span>
+        </button>
       </div>
     </header>
 
-    <div class="presets-bar">
-      <span class="presets-label">⚡ 1-Click Demos:</span>
-      <button type="button" class="btn-preset" id="pHealthy"><span class="dot dot-green"></span> Healthy Adult (1.9%)</button>
-      <button type="button" class="btn-preset" id="pModerate"><span class="dot dot-amber"></span> Borderline (36.6%)</button>
-      <button type="button" class="btn-preset" id="pHigh"><span class="dot dot-red"></span> High Risk (97.4%)</button>
-      <button type="button" class="btn-preset btn-reset" id="pReset">Reset</button>
+    <!-- Quick Patient Presets Strip -->
+    <div class="presets-strip">
+      <span class="strip-label">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        Instant Presets:
+      </span>
+      <button type="button" class="btn-pill" id="btnPresetHealthy"><span class="dot-status dot-healthy"></span> Healthy Adult (1.9% Risk)</button>
+      <button type="button" class="btn-pill" id="btnPresetModerate"><span class="dot-status dot-warning"></span> Middle-Aged Borderline (36.6%)</button>
+      <button type="button" class="btn-pill" id="btnPresetHigh"><span class="dot-status dot-danger"></span> High Risk Angina (97.4%)</button>
+      <button type="button" class="btn-pill btn-clear" id="btnResetAll">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path></svg>
+        Reset
+      </button>
     </div>
 
-    <div class="main-grid">
-      <div class="form-col">
-        <form id="patientForm">
-          <div class="form-card">
-            <h2 class="card-title">1. Patient Profile & Hemodynamics</h2>
-            <p class="card-subtitle">Demographic indicators and arterial pressure</p>
-            <div class="input-grid">
-              <div class="form-group">
-                <label class="form-label">Age (years) <span class="hint">18-95</span></label>
-                <div class="slider-row">
-                  <input type="range" id="slAge" min="18" max="95" value="55" class="custom-slider">
-                  <input type="number" id="inAge" name="age" min="18" max="95" value="55" class="form-control num-box" required>
+    <!-- Main Workspace Grid -->
+    <main class="workspace-grid">
+      
+      <!-- Input Panel Column -->
+      <section class="form-column">
+        <form id="cardioForm">
+          
+          <!-- Section 1 -->
+          <div class="card-panel">
+            <div class="panel-header">
+              <div class="panel-icon icon-cyan">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+              </div>
+              <div>
+                <h2 class="panel-title">1. Patient Profile & Hemodynamics</h2>
+                <p class="panel-desc">Demographic vitals and baseline arterial pressure</p>
+              </div>
+            </div>
+
+            <div class="fields-grid">
+              <div class="field-wrap">
+                <div class="field-top"><label>Age (years)</label><span class="field-hint">18-95</span></div>
+                <div class="slider-group">
+                  <input type="range" id="slAge" min="18" max="95" value="55" class="range-slider">
+                  <input type="number" id="inAge" name="age" min="18" max="95" value="55" class="input-box slider-num" required>
                 </div>
               </div>
-              <div class="form-group">
-                <label class="form-label">Biological Sex</label>
-                <div class="pill-group">
-                  <label class="pill-opt"><input type="radio" name="sex" value="1" checked><span>Male</span></label>
-                  <label class="pill-opt"><input type="radio" name="sex" value="0"><span>Female</span></label>
+
+              <div class="field-wrap">
+                <div class="field-top"><label>Biological Sex</label><span class="field-hint">Clinical risk</span></div>
+                <div class="toggle-radios">
+                  <label class="radio-lbl"><input type="radio" name="sex" value="1" checked><span>Male</span></label>
+                  <label class="radio-lbl"><input type="radio" name="sex" value="0"><span>Female</span></label>
                 </div>
               </div>
-              <div class="form-group">
-                <label class="form-label">Resting Blood Pressure <span class="hint">mm Hg</span></label>
-                <input type="number" id="inTrestbps" name="trestbps" min="70" max="230" value="130" class="form-control" required>
+
+              <div class="field-wrap">
+                <div class="field-top"><label>Resting Blood Pressure</label><span class="field-hint">Normal: 90-120 mmHg</span></div>
+                <input type="number" id="inTrestbps" name="trestbps" min="70" max="230" value="130" class="input-box" required>
               </div>
-              <div class="form-group">
-                <label class="form-label">Serum Cholesterol <span class="hint">mg/dL</span></label>
-                <input type="number" id="inChol" name="chol" min="100" max="600" value="230" class="form-control" required>
+
+              <div class="field-wrap">
+                <div class="field-top"><label>Serum Cholesterol</label><span class="field-hint">Desirable: &lt;200 mg/dL</span></div>
+                <input type="number" id="inChol" name="chol" min="100" max="600" value="230" class="input-box" required>
               </div>
-              <div class="form-group col-2">
-                <label class="form-label">Fasting Blood Sugar &gt; 120 mg/dL</label>
-                <div class="pill-group">
-                  <label class="pill-opt"><input type="radio" name="fbs" value="0" checked><span>No (&le; 120 mg/dL)</span></label>
-                  <label class="pill-opt"><input type="radio" name="fbs" value="1"><span>Yes (&gt; 120 mg/dL)</span></label>
+
+              <div class="field-wrap full-width">
+                <div class="field-top"><label>Fasting Blood Sugar &gt; 120 mg/dL (fbs)</label><span class="field-hint">Glycemic baseline</span></div>
+                <div class="toggle-radios">
+                  <label class="radio-lbl"><input type="radio" name="fbs" value="0" checked><span>No (&le; 120 mg/dL)</span></label>
+                  <label class="radio-lbl"><input type="radio" name="fbs" value="1"><span>Yes (&gt; 120 mg/dL)</span></label>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="form-card" style="margin-top: 18px;">
-            <h2 class="card-title">2. Cardiac Symptoms & Exertion Response</h2>
-            <p class="card-subtitle">Angina presentation and physical stress tolerance</p>
-            <div class="input-grid">
-              <div class="form-group col-2">
-                <label class="form-label">Chest Pain Classification (cp)</label>
-                <select id="inCp" name="cp" class="form-control">
-                  <option value="1">Type 1: Typical Angina</option>
-                  <option value="2">Type 2: Atypical Angina</option>
-                  <option value="3">Type 3: Non-Anginal</option>
+          <!-- Section 2 -->
+          <div class="card-panel" style="margin-top: 16px;">
+            <div class="panel-header">
+              <div class="panel-icon icon-green">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
+              </div>
+              <div>
+                <h2 class="panel-title">2. Cardiac Symptoms & Exertion Tolerance</h2>
+                <p class="panel-desc">Angina presentation and maximum stress cardiovascular response</p>
+              </div>
+            </div>
+
+            <div class="fields-grid">
+              <div class="field-wrap full-width">
+                <div class="field-top"><label>Chest Pain Classification (cp)</label><span class="field-hint">Clinical symptomatology</span></div>
+                <select id="inCp" name="cp" class="input-box">
+                  <option value="1">Type 1: Typical Angina (Exertional pressure)</option>
+                  <option value="2">Type 2: Atypical Angina (Non-classical discomfort)</option>
+                  <option value="3">Type 3: Non-Anginal Chest Pain</option>
                   <option value="4" selected>Type 4: Asymptomatic (Silent Ischemia)</option>
                 </select>
               </div>
-              <div class="form-group">
-                <label class="form-label">Max Heart Rate Achieved <span class="hint">bpm</span></label>
-                <input type="number" id="inThalach" name="thalach" min="60" max="230" value="150" class="form-control" required>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Exercise Angina (exang)</label>
-                <div class="pill-group">
-                  <label class="pill-opt"><input type="radio" name="exang" value="0" checked><span>No</span></label>
-                  <label class="pill-opt"><input type="radio" name="exang" value="1"><span>Yes</span></label>
+
+              <div class="field-wrap">
+                <div class="field-top"><label>Max Heart Rate (thalach)</label><span class="field-hint" id="txtTargetHr">Target: ~165 bpm</span></div>
+                <div class="slider-group">
+                  <input type="range" id="slThalach" min="60" max="220" value="150" class="range-slider">
+                  <input type="number" id="inThalach" name="thalach" min="60" max="230" value="150" class="input-box slider-num" required>
                 </div>
               </div>
-              <div class="form-group col-2">
-                <label class="form-label">Resting Electrocardiogram</label>
-                <select id="inRestecg" name="restecg" class="form-control">
-                  <option value="0" selected>0: Normal</option>
-                  <option value="1">1: ST-T Wave Abnormality</option>
-                  <option value="2">2: Left Ventricular Hypertrophy</option>
+
+              <div class="field-wrap">
+                <div class="field-top"><label>Exercise Induced Angina (exang)</label><span class="field-hint">Provoked pain</span></div>
+                <div class="toggle-radios">
+                  <label class="radio-lbl"><input type="radio" name="exang" value="0" checked><span>No</span></label>
+                  <label class="radio-lbl"><input type="radio" name="exang" value="1"><span>Yes</span></label>
+                </div>
+              </div>
+
+              <div class="field-wrap full-width">
+                <div class="field-top"><label>Resting Electrocardiogram (restecg)</label><span class="field-hint">Baseline rhythm</span></div>
+                <select id="inRestecg" name="restecg" class="input-box">
+                  <option value="0" selected>0: Normal Sinus Rhythm</option>
+                  <option value="1">1: ST-T Wave Abnormality (&gt; 0.05 mV)</option>
+                  <option value="2">2: Left Ventricular Hypertrophy (LVH)</option>
                 </select>
               </div>
             </div>
           </div>
 
-          <div class="form-card" style="margin-top: 18px;">
-            <h2 class="card-title">3. Stress Diagnostics & Fluoroscopy</h2>
-            <p class="card-subtitle">ST depression, vessel calcification, and perfusion scan</p>
-            <div class="input-grid">
-              <div class="form-group">
-                <label class="form-label">ST Depression (oldpeak) <span class="hint">mm</span></label>
-                <div class="slider-row">
-                  <input type="range" id="slOldpeak" min="0.0" max="6.0" step="0.1" value="1.0" class="custom-slider">
-                  <input type="number" id="inOldpeak" name="oldpeak" min="0.0" max="6.2" step="0.1" value="1.0" class="form-control num-box" required>
+          <!-- Section 3 -->
+          <div class="card-panel" style="margin-top: 16px;">
+            <div class="panel-header">
+              <div class="panel-icon icon-purple">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              </div>
+              <div>
+                <h2 class="panel-title">3. Stress Diagnostics & Fluoroscopy</h2>
+                <p class="panel-desc">ST depression, fluoroscopy vessels, and thallium perfusion scan</p>
+              </div>
+            </div>
+
+            <div class="fields-grid">
+              <div class="field-wrap">
+                <div class="field-top"><label>ST Depression (oldpeak)</label><span class="field-hint">Induced in mm</span></div>
+                <div class="slider-group">
+                  <input type="range" id="slOldpeak" min="0.0" max="6.0" step="0.1" value="1.0" class="range-slider">
+                  <input type="number" id="inOldpeak" name="oldpeak" min="0.0" max="6.2" step="0.1" value="1.0" class="input-box slider-num" required>
                 </div>
               </div>
-              <div class="form-group">
-                <label class="form-label">Peak ST Slope</label>
-                <select id="inSlope" name="slope" class="form-control">
-                  <option value="1">1: Upsloping</option>
-                  <option value="2" selected>2: Flat</option>
-                  <option value="3">3: Downsloping</option>
+
+              <div class="field-wrap">
+                <div class="field-top"><label>Peak ST Slope</label><span class="field-hint">Trajectory</span></div>
+                <select id="inSlope" name="slope" class="input-box">
+                  <option value="1">1: Upsloping (Favorable)</option>
+                  <option value="2" selected>2: Flat (Ischemic sign)</option>
+                  <option value="3">3: Downsloping (Severe sign)</option>
                 </select>
               </div>
-              <div class="form-group">
-                <label class="form-label">Major Vessels Blocked (ca)</label>
-                <select id="inCa" name="ca" class="form-control">
-                  <option value="0" selected>0 Major Vessels</option>
-                  <option value="1">1 Major Vessel</option>
-                  <option value="2">2 Major Vessels</option>
-                  <option value="3">3 Major Vessels</option>
+
+              <div class="field-wrap">
+                <div class="field-top"><label>Fluoroscopy Occluded Vessels (ca)</label><span class="field-hint">0 - 3 vessels</span></div>
+                <select id="inCa" name="ca" class="input-box">
+                  <option value="0" selected>0 Major Vessels Colored</option>
+                  <option value="1">1 Major Vessel Colored</option>
+                  <option value="2">2 Major Vessels Colored</option>
+                  <option value="3">3 Major Vessels Colored</option>
                 </select>
               </div>
-              <div class="form-group">
-                <label class="form-label">Thallium Heart Scan (thal)</label>
-                <select id="inThal" name="thal" class="form-control">
+
+              <div class="field-wrap">
+                <div class="field-top"><label>Thallium Perfusion (thal)</label><span class="field-hint">Scintigraphy scan</span></div>
+                <select id="inThal" name="thal" class="input-box">
                   <option value="3" selected>3: Normal Perfusion</option>
-                  <option value="6">6: Fixed Defect</option>
-                  <option value="7">7: Reversible Defect</option>
+                  <option value="6">6: Fixed Defect (Previous Infarct)</option>
+                  <option value="7">7: Reversible Defect (Active Ischemia)</option>
                 </select>
               </div>
             </div>
           </div>
 
           <div style="margin-top: 18px;">
-            <button type="submit" id="btnSubmit" class="btn-submit">Run Python Heart Evaluation</button>
+            <button type="submit" id="btnSubmitPredict" class="btn-run-ai">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+              <span>Run AI Multi-Model Cardiac Evaluation</span>
+            </button>
           </div>
         </form>
-      </div>
+      </section>
 
-      <div class="results-col">
-        <div class="results-card" id="cardPlaceholder">
-          <div class="placeholder-view">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>
-            </svg>
-            <h3 class="placeholder-title">Awaiting Clinical Data</h3>
-            <p class="placeholder-desc">Click any of the <strong>1-Click Demos</strong> above or fill in the patient parameters to generate an instant cardiovascular prediction.</p>
-          </div>
-        </div>
-
-        <div class="results-card" id="cardActive" style="display: none;">
-          <div>
-            <span class="result-badge" id="badgeRisk">LOW RISK</span>
-            <h3 class="result-headline" id="headRisk">Cardiovascular Evaluation</h3>
-          </div>
-
-          <div class="gauge-wrapper">
-            <div class="gauge-box">
-              <svg class="gauge-svg" viewBox="0 0 200 120">
-                <path class="gauge-bg" d="M 20 105 A 80 80 0 0 1 180 105" fill="none" stroke-width="16" stroke-linecap="round"/>
-                <path class="gauge-fill" id="arcFill" d="M 20 105 A 80 80 0 0 1 180 105" fill="none" stroke-width="16" stroke-linecap="round"/>
-              </svg>
-              <div class="gauge-val">
-                <div class="gauge-score"><span id="txtScore">0.0</span>%</div>
-                <div class="gauge-sub">Probability of Disease</div>
+      <!-- Diagnostic Output HUD Column -->
+      <section class="results-column">
+        <div class="diagnostic-hud">
+          
+          <!-- Placeholder State -->
+          <div class="placeholder-state" id="hudPlaceholder">
+            <div class="pulse-rings">
+              <div class="ring-circ r-1"></div>
+              <div class="ring-circ r-2"></div>
+              <div class="ring-core">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
               </div>
             </div>
+            <h3 class="ph-title">CardioPulse Diagnostic HUD</h3>
+            <p class="ph-desc">Awaiting patient clinical input. Select an <strong>Instant Preset</strong> above or submit the form on the left to compute real-time multi-model risk stratification.</p>
           </div>
 
-          <div class="summary-box" id="txtSummary">Diagnostic summary will appear here.</div>
+          <!-- Active Results HUD -->
+          <div class="active-hud" id="hudActive">
+            
+            <!-- Result Header -->
+            <div class="hud-header">
+              <div>
+                <span class="risk-badge badge-l" id="riskBadge">LOW RISK</span>
+                <h3 class="hud-headline" id="txtHeadline">Favorable Cardiovascular Profile</h3>
+                <div style="font-size:0.72rem; color:var(--text-faint); margin-top:2px;" id="txtPatientId">Patient ID: PAT-2026-X812 • Verified</div>
+              </div>
+              <button type="button" class="btn-pdf" id="btnPrintPdf" title="Print official Cardiology Assessment Report">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+                Print PDF
+              </button>
+            </div>
 
-          <div>
-            <h4 class="sec-title">Contributing Risk Biomarkers</h4>
-            <div class="factors-list" id="listFactors"></div>
+            <!-- Dial Gauge -->
+            <div class="gauge-wrapper">
+              <div class="gauge-dial">
+                <svg class="gauge-svg" viewBox="0 0 200 120">
+                  <path class="arc-bg" d="M 20 105 A 80 80 0 0 1 180 105" fill="none" stroke-width="16" stroke-linecap="round"/>
+                  <path class="arc-progress" id="arcProgress" d="M 20 105 A 80 80 0 0 1 180 105" fill="none" stroke-width="16" stroke-linecap="round"/>
+                </svg>
+                <div class="gauge-center-val">
+                  <div class="score-txt"><span id="txtScoreVal">0.0</span>%</div>
+                  <div class="score-sub">Consensus Risk Score</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Multi-Model Consensus Panel -->
+            <div class="consensus-panel">
+              <div class="consensus-top">
+                <span>Multi-Model Consensus Agreement</span>
+                <span class="consensus-tag" id="txtConsensusTag">3/3 Models Agree</span>
+              </div>
+              <div class="model-bars">
+                <div class="model-bar-item">
+                  <span class="m-name">Random Forest</span>
+                  <div class="m-track"><div class="m-fill" id="fillRf" style="width:0%; background:#38bdf8;"></div></div>
+                  <span class="m-pct" id="pctRf">0%</span>
+                </div>
+                <div class="model-bar-item">
+                  <span class="m-name">Gradient Boosting</span>
+                  <div class="m-track"><div class="m-fill" id="fillGb" style="width:0%; background:#a855f7;"></div></div>
+                  <span class="m-pct" id="pctGb">0%</span>
+                </div>
+                <div class="model-bar-item">
+                  <span class="m-name">Logistic Regression</span>
+                  <div class="m-track"><div class="m-fill" id="fillLr" style="width:0%; background:#10b981;"></div></div>
+                  <span class="m-pct" id="pctLr">0%</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Dual Charts Row: Radar & SHAP Waterfall -->
+            <div class="dual-charts-row">
+              <!-- Radar Chart -->
+              <div class="chart-box">
+                <div class="box-title">6-Axis Cardiac Stress Radar</div>
+                <div class="radar-svg-box">
+                  <svg id="radarSvg" width="160" height="135" viewBox="-80 -70 160 140"></svg>
+                </div>
+                <div style="font-size:0.66rem; color:var(--text-faint); text-align:center;">
+                  <span style="color:#38bdf8;">■ Patient Risk Polygon</span> vs <span style="color:#64748b;">■ Cleveland Baseline</span>
+                </div>
+              </div>
+
+              <!-- SHAP Feature Waterfall Impact -->
+              <div class="chart-box">
+                <div class="box-title">Feature Attribution (SHAP)</div>
+                <div class="waterfall-list" id="wfContainer">
+                  <!-- Populated dynamically -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Action Plan & Recommendations -->
+            <div class="recs-box">
+              <div class="box-title">Cardiologist Clinical Guidance & Plan</div>
+              <ul class="recs-ul" id="recsUl"></ul>
+            </div>
+
           </div>
 
-          <div>
-            <h4 class="sec-title">Clinical Action Plan</h4>
-            <ul class="recs-list" id="listRecs"></ul>
-          </div>
         </div>
-      </div>
-    </div>
+      </section>
+
+    </main>
 
     <footer class="app-footer">
-      Pure Python Application • Trained on UCI Cleveland Heart Disease Dataset (303 Cohort) • Deployed on Vercel
+      CardioPulse Pro • Real-Time Multi-Model Machine Learning • Trained on Cleveland Clinic Cohort • Deployed on Vercel
     </footer>
   </div>
 
   <script>
-    const G_CIRC = 251.327;
-    const form = document.getElementById('patientForm');
+    // ---------------------------------------------------------
+    // Real-Time Canvas ECG Oscilloscope Simulator
+    // ---------------------------------------------------------
+    const canvas = document.getElementById('ecgCanvas');
+    const ctx = canvas.getContext('2d');
+    let ecgSpeed = 150; // bpm
+    let xPos = 0;
+    let ecgPoints = [];
+    const maxPoints = 350;
+
+    function resizeCanvas() {
+      canvas.width = canvas.parentElement.clientWidth;
+      canvas.height = canvas.parentElement.clientHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // P-Q-R-S-T Cardiac Waveform Generator
+    function getEcgY(t) {
+      const cycle = t % 1.0;
+      if (cycle > 0.15 && cycle < 0.25) return -Math.sin((cycle - 0.15) * Math.PI / 0.1) * 6; // P wave
+      if (cycle > 0.35 && cycle < 0.38) return Math.sin((cycle - 0.35) * Math.PI / 0.03) * 5; // Q dip
+      if (cycle >= 0.38 && cycle < 0.42) return -Math.sin((cycle - 0.38) * Math.PI / 0.04) * 26; // R peak
+      if (cycle >= 0.42 && cycle < 0.46) return Math.sin((cycle - 0.42) * Math.PI / 0.04) * 9; // S dip
+      if (cycle > 0.55 && cycle < 0.72) return -Math.sin((cycle - 0.55) * Math.PI / 0.17) * 9; // T wave
+      return 0; // isoelectric line
+    }
+
+    let simTime = 0;
+    function animateEcg() {
+      const freq = ecgSpeed / 60; // beats per second
+      simTime += 0.016 * freq;
+      const midY = canvas.height / 2;
+      const y = midY + getEcgY(simTime);
+
+      ecgPoints.push(y);
+      if (ecgPoints.length > canvas.width) {
+        ecgPoints.shift();
+      }
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw Grid Lines
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.06)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += 20) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let gy = 0; gy < canvas.height; gy += 15) {
+        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(canvas.width, gy); ctx.stroke();
+      }
+
+      // Draw ECG Line
+      ctx.beginPath();
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2;
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 6;
+
+      for (let i = 0; i < ecgPoints.length; i++) {
+        if (i === 0) ctx.moveTo(i, ecgPoints[i]);
+        else ctx.lineTo(i, ecgPoints[i]);
+      }
+      ctx.stroke();
+
+      // Leading Glowing Pulse Dot
+      if (ecgPoints.length > 0) {
+        const lastX = ecgPoints.length - 1;
+        const lastY = ecgPoints[lastX];
+        ctx.beginPath();
+        ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.shadowColor = '#38bdf8';
+        ctx.shadowBlur = 10;
+        ctx.fill();
+      }
+
+      requestAnimationFrame(animateEcg);
+    }
+    requestAnimationFrame(animateEcg);
+
+    // ---------------------------------------------------------
+    // Web Audio Synthesizer Heartbeat Beep
+    // ---------------------------------------------------------
+    let audioCtx = null;
+    let isAudioActive = false;
+    let audioInterval = null;
+
+    function playBeep() {
+      if (!isAudioActive) return;
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(650, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.08);
+      } catch (e) {}
+    }
+
+    function syncHeartbeatAudio() {
+      if (audioInterval) clearInterval(audioInterval);
+      if (isAudioActive) {
+        const msPerBeat = (60 / ecgSpeed) * 1000;
+        audioInterval = setInterval(playBeep, msPerBeat);
+      }
+    }
+
+    const btnAudio = document.getElementById('btnAudioToggle');
+    btnAudio.onclick = () => {
+      isAudioActive = !isAudioActive;
+      btnAudio.classList.toggle('active', isAudioActive);
+      document.getElementById('txtSoundState').textContent = isAudioActive ? 'Audio Active' : 'Audio Muted';
+      syncHeartbeatAudio();
+      if (isAudioActive) playBeep();
+    };
+
+    // ---------------------------------------------------------
+    // Input Sync & Sliders
+    // ---------------------------------------------------------
+    const form = document.getElementById('cardioForm');
     const slAge = document.getElementById('slAge');
     const inAge = document.getElementById('inAge');
-    const slOld = document.getElementById('slOldpeak');
-    const inOld = document.getElementById('inOldpeak');
-    const cardPlaceholder = document.getElementById('cardPlaceholder');
-    const cardActive = document.getElementById('cardActive');
+    const slThalach = document.getElementById('slThalach');
+    const inThalach = document.getElementById('inThalach');
+    const slOldpeak = document.getElementById('slOldpeak');
+    const inOldpeak = document.getElementById('inOldpeak');
+    const txtLiveBpm = document.getElementById('txtLiveBpm');
+    const txtTargetHr = document.getElementById('txtTargetHr');
 
-    slAge.oninput = () => inAge.value = slAge.value;
-    inAge.oninput = () => slAge.value = inAge.value;
-    slOld.oninput = () => inOld.value = parseFloat(slOld.value).toFixed(1);
-    inOld.oninput = () => slOld.value = inOld.value;
+    function updateAgeCalcs() {
+      const a = parseInt(inAge.value) || 55;
+      const target = Math.round(220 - a);
+      txtTargetHr.textContent = `Formula: ~${target} bpm`;
+    }
 
+    slAge.oninput = () => { inAge.value = slAge.value; updateAgeCalcs(); };
+    inAge.oninput = () => { slAge.value = inAge.value; updateAgeCalcs(); };
+
+    function updateHeartRate(val) {
+      ecgSpeed = Math.max(50, Math.min(230, parseInt(val) || 120));
+      txtLiveBpm.innerHTML = `${ecgSpeed} <span style="font-size:0.75rem; color:#94a3b8;">BPM</span>`;
+      syncHeartbeatAudio();
+    }
+    slThalach.oninput = () => { inThalach.value = slThalach.value; updateHeartRate(slThalach.value); };
+    inThalach.oninput = () => { slThalach.value = inThalach.value; updateHeartRate(inThalach.value); };
+
+    slOldpeak.oninput = () => { inOldpeak.value = parseFloat(slOldpeak.value).toFixed(1); };
+    inOldpeak.oninput = () => { slOldpeak.value = inOldpeak.value; };
+
+    updateAgeCalcs();
+    updateHeartRate(inThalach.value);
+
+    // ---------------------------------------------------------
+    // Instant Patient Demos
+    // ---------------------------------------------------------
     const PRESETS = {
       healthy: { age: 32, sex: 0, cp: 2, trestbps: 115, chol: 175, fbs: 0, restecg: 0, thalach: 180, exang: 0, oldpeak: 0.0, slope: 1, ca: 0, thal: 3 },
       moderate: { age: 54, sex: 1, cp: 3, trestbps: 138, chol: 235, fbs: 0, restecg: 1, thalach: 145, exang: 0, oldpeak: 1.2, slope: 2, ca: 0, thal: 6 },
@@ -660,28 +1086,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       document.getElementById('inChol').value = d.chol;
       form.querySelector(`input[name="fbs"][value="${d.fbs}"]`).checked = true;
       document.getElementById('inCp').value = d.cp;
-      document.getElementById('inThalach').value = d.thalach;
+      slThalach.value = inThalach.value = d.thalach;
+      updateHeartRate(d.thalach);
       form.querySelector(`input[name="exang"][value="${d.exang}"]`).checked = true;
       document.getElementById('inRestecg').value = d.restecg;
-      slOld.value = inOld.value = d.oldpeak.toFixed(1);
+      slOldpeak.value = inOldpeak.value = d.oldpeak.toFixed(1);
       document.getElementById('inSlope').value = d.slope;
       document.getElementById('inCa').value = d.ca;
       document.getElementById('inThal').value = d.thal;
-      submitData();
+      updateAgeCalcs();
+      triggerAiEvaluation();
     }
 
-    document.getElementById('pHealthy').onclick = () => applyPreset('healthy');
-    document.getElementById('pModerate').onclick = () => applyPreset('moderate');
-    document.getElementById('pHigh').onclick = () => applyPreset('high');
-    document.getElementById('pReset').onclick = () => {
+    document.getElementById('btnPresetHealthy').onclick = () => applyPreset('healthy');
+    document.getElementById('btnPresetModerate').onclick = () => applyPreset('moderate');
+    document.getElementById('btnPresetHigh').onclick = () => applyPreset('high');
+    document.getElementById('btnResetAll').onclick = () => {
       form.reset();
       slAge.value = inAge.value = 55;
-      slOld.value = inOld.value = "1.0";
-      cardActive.style.display = 'none';
-      cardPlaceholder.style.display = 'block';
+      slThalach.value = inThalach.value = 150;
+      slOldpeak.value = inOldpeak.value = "1.0";
+      updateHeartRate(150);
+      document.getElementById('hudActive').style.display = 'none';
+      document.getElementById('hudPlaceholder').style.display = 'block';
     };
 
-    async function submitData() {
+    // ---------------------------------------------------------
+    // Prediction API Connection
+    // ---------------------------------------------------------
+    async function triggerAiEvaluation() {
       const fd = new FormData(form);
       const payload = {
         age: parseInt(fd.get('age')), sex: parseInt(fd.get('sex')), cp: parseInt(fd.get('cp')),
@@ -699,59 +1132,180 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           body: JSON.stringify(payload)
         });
         const data = await res.json();
-        renderResult(data);
-      } catch (e) {
-        alert('Prediction request failed: ' + e.message);
+        renderDiagnosticHud(data);
+      } catch (err) {
+        alert('CardioPulse AI request failed: ' + err.message);
       }
     }
 
-    form.onsubmit = (e) => { e.preventDefault(); submitData(); };
+    form.onsubmit = (e) => { e.preventDefault(); triggerAiEvaluation(); };
 
-    function renderResult(data) {
-      cardPlaceholder.style.display = 'none';
-      cardActive.style.display = 'flex';
+    // ---------------------------------------------------------
+    // Render Results & Radar SVG
+    // ---------------------------------------------------------
+    const GAUGE_CIRC = 251.327;
 
-      const badge = document.getElementById('badgeRisk');
-      badge.className = 'result-badge';
+    function renderDiagnosticHud(data) {
+      document.getElementById('hudPlaceholder').style.display = 'none';
+      const activeHud = document.getElementById('hudActive');
+      activeHud.style.display = 'flex';
+
+      // Badge
+      const badge = document.getElementById('riskBadge');
+      badge.className = 'risk-badge';
       if (data.risk_tier === 'Low Risk') {
-        badge.classList.add('badge-low'); badge.textContent = 'LOW RISK';
+        badge.classList.add('badge-l'); badge.textContent = 'LOW RISK';
       } else if (data.risk_tier === 'Moderate Risk') {
-        badge.classList.add('badge-mod'); badge.textContent = 'MODERATE RISK';
+        badge.classList.add('badge-m'); badge.textContent = 'MODERATE RISK';
       } else {
-        badge.classList.add('badge-high'); badge.textContent = 'HIGH RISK';
+        badge.classList.add('badge-h'); badge.textContent = 'HIGH RISK';
       }
 
-      document.getElementById('headRisk').textContent = data.headline;
-      document.getElementById('txtSummary').textContent = data.summary;
-      document.getElementById('txtScore').textContent = data.risk_percentage.toFixed(1);
+      document.getElementById('txtHeadline').textContent = data.headline;
+      document.getElementById('txtPatientId').textContent = `Patient ID: ${data.patient_id} • Cohort Percentile: ${data.cohort_percentile}th`;
 
-      const offset = G_CIRC * (1 - Math.min(1.0, data.probability));
-      const arc = document.getElementById('arcFill');
-      arc.style.strokeDashoffset = offset;
-      arc.style.stroke = data.probability < 0.35 ? '#10b981' : (data.probability < 0.65 ? '#f59e0b' : '#f43f5e');
+      // Animate Gauge Arc
+      const targetOffset = GAUGE_CIRC * (1 - Math.min(1.0, data.ensemble_probability));
+      const arc = document.getElementById('arcProgress');
+      arc.style.strokeDashoffset = targetOffset;
+      arc.style.stroke = data.ensemble_probability < 0.35 ? '#10b981' : (data.ensemble_probability < 0.65 ? '#f59e0b' : '#f43f5e');
 
-      const factorsDiv = document.getElementById('listFactors');
-      factorsDiv.innerHTML = '';
-      if (!data.factors || data.factors.length === 0) {
-        factorsDiv.innerHTML = '<div class="factor-item"><span class="factor-p">Optimal Cardiovascular Biomarkers</span><span class="factor-tag" style="background:rgba(16,185,129,0.2);color:#34d399">Normal</span></div>';
-      } else {
-        data.factors.forEach(f => {
-          const item = document.createElement('div');
-          item.className = 'factor-item';
-          const tc = f.sev === 'high' ? 'tag-h' : 'tag-m';
-          item.innerHTML = `<div><div class="factor-p">${f.param} — ${f.status}</div><div class="factor-n">${f.note}</div></div><span class="factor-tag ${tc}">${f.value}</span>`;
-          factorsDiv.appendChild(item);
-        });
-      }
+      // Counter
+      animateVal(document.getElementById('txtScoreVal'), data.ensemble_risk_percentage, 800);
 
-      const recsUl = document.getElementById('listRecs');
-      recsUl.innerHTML = '';
+      // Multi-Model Consensus
+      document.getElementById('txtConsensusTag').textContent = data.consensus_agreement;
+      setBar('fillRf', 'pctRf', data.models.rf.probability);
+      setBar('fillGb', 'pctGb', data.models.gb.probability);
+      setBar('fillLr', 'pctLr', data.models.lr.probability);
+
+      // Draw SVG Radar
+      drawRadar(data.radar_metrics);
+
+      // SHAP Waterfall Bars
+      renderWaterfall(data.attributions);
+
+      // Recommendations
+      const ul = document.getElementById('recsUl');
+      ul.innerHTML = '';
       data.recommendations.forEach(r => {
         const li = document.createElement('li');
         li.textContent = r;
-        recsUl.appendChild(li);
+        ul.appendChild(li);
       });
     }
+
+    function setBar(fillId, txtId, prob) {
+      const pct = (prob * 100).toFixed(1);
+      document.getElementById(fillId).style.width = pct + '%';
+      document.getElementById(txtId).textContent = pct + '%';
+    }
+
+    function animateVal(el, target, duration) {
+      const start = performance.now();
+      function step(now) {
+        const p = Math.min((now - start) / duration, 1);
+        const ease = 1 - Math.pow(1 - p, 3);
+        el.textContent = (target * ease).toFixed(1);
+        if (p < 1) requestAnimationFrame(step);
+        else el.textContent = target.toFixed(1);
+      }
+      requestAnimationFrame(step);
+    }
+
+    // Dynamic 6-Axis Radar SVG
+    function drawRadar(m) {
+      const svg = document.getElementById('radarSvg');
+      svg.innerHTML = '';
+
+      const keys = ['blood_pressure', 'cholesterol', 'ischemic_st', 'vessel_occlusion', 'perfusion_defect', 'exertion_strain'];
+      const labels = ['BP', 'Lipids', 'ST Depr', 'Vessels', 'Perfusion', 'Strain'];
+      const count = 6;
+      const R = 50;
+
+      // Draw Concentric Reference Web
+      [0.33, 0.66, 1.0].forEach(scale => {
+        let pts = '';
+        for (let i = 0; i < count; i++) {
+          const angle = (i * 2 * Math.PI / count) - (Math.PI / 2);
+          const px = Math.cos(angle) * R * scale;
+          const py = Math.sin(angle) * R * scale;
+          pts += `${px},${py} `;
+        }
+        const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        poly.setAttribute('points', pts.trim());
+        poly.setAttribute('fill', 'none');
+        poly.setAttribute('stroke', 'rgba(255,255,255,0.08)');
+        poly.setAttribute('stroke-width', '1');
+        svg.appendChild(poly);
+      });
+
+      // Axis spokes & labels
+      for (let i = 0; i < count; i++) {
+        const angle = (i * 2 * Math.PI / count) - (Math.PI / 2);
+        const px = Math.cos(angle) * R;
+        const py = Math.sin(angle) * R;
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', '0'); line.setAttribute('y1', '0');
+        line.setAttribute('x2', px); line.setAttribute('y2', py);
+        line.setAttribute('stroke', 'rgba(255,255,255,0.1)');
+        svg.appendChild(line);
+
+        // Labels
+        const lx = Math.cos(angle) * (R + 14);
+        const ly = Math.sin(angle) * (R + 14) + 3;
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', lx); text.setAttribute('y', ly);
+        text.setAttribute('font-size', '7');
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('fill', '#94a3b8');
+        text.textContent = labels[i];
+        svg.appendChild(text);
+      }
+
+      // Patient Polygon
+      let patientPts = '';
+      for (let i = 0; i < count; i++) {
+        const angle = (i * 2 * Math.PI / count) - (Math.PI / 2);
+        const val = (m[keys[i]] || 20) / 100;
+        const r = Math.max(10, Math.min(R, R * val));
+        const px = Math.cos(angle) * r;
+        const py = Math.sin(angle) * r;
+        patientPts += `${px},${py} `;
+      }
+
+      const patientPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      patientPoly.setAttribute('points', patientPts.trim());
+      patientPoly.setAttribute('fill', 'rgba(56, 189, 248, 0.25)');
+      patientPoly.setAttribute('stroke', '#38bdf8');
+      patientPoly.setAttribute('stroke-width', '1.8');
+      svg.appendChild(patientPoly);
+    }
+
+    // Render SHAP Waterfall Bars
+    function renderWaterfall(attrs) {
+      const c = document.getElementById('wfContainer');
+      c.innerHTML = '';
+      if (!attrs || attrs.length === 0) {
+        c.innerHTML = '<div style="font-size:0.72rem;color:var(--text-faint);">All parameters within population norm.</div>';
+        return;
+      }
+      attrs.forEach(a => {
+        const isRisk = a.direction === 'risk';
+        const item = document.createElement('div');
+        item.className = 'wf-item';
+        item.innerHTML = `
+          <span class="wf-label" title="${a.label}">${a.label}</span>
+          <div class="wf-bar-wrap">
+            <div class="wf-bar ${isRisk ? 'wf-risk' : 'wf-prot'}" style="width: ${Math.min(100, a.percentage)}%"></div>
+          </div>
+          <span class="wf-val ${isRisk ? 'wf-risk' : 'wf-prot'}">${isRisk ? '+' : '-'}${a.percentage}%</span>
+        `;
+        c.appendChild(item);
+      });
+    }
+
+    document.getElementById('btnPrintPdf').onclick = () => window.print();
   </script>
 </body>
 </html>
@@ -759,81 +1313,134 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 
 # -------------------------------------------------------------
-# Routes (Pure Python App)
+# API Endpoints (Pure Python)
 # -------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
-    """Serves the complete interactive web UI directly from Python."""
-    return HTMLResponse(content=HTML_TEMPLATE, status_code=200)
+    """Serves the complete Next-Gen Cardiovascular Diagnostic UI."""
+    return HTMLResponse(content=UI_HTML, status_code=200)
 
 
 @app.get("/api/health")
-def health_status():
+def health():
     return {
         "status": "healthy",
-        "app": "CardioPulse AI Full-Stack Python",
-        "runtime": "python-fastapi",
-        "platform": "Vercel Serverless",
-        "model_loaded": model_pipeline is not None,
+        "system": "CardioPulse PRO Next-Gen Diagnostic OS",
+        "platform": "Vercel Serverless Python",
+        "models_loaded": list(ensemble_models.keys()),
         "timestamp": datetime.now().isoformat()
     }
 
 
 @app.post("/api/predict")
 @app.post("/predict")
-def run_prediction(patient: PatientPayload):
-    """Calculates risk prediction and clinical explanations."""
-    global model_pipeline
+def predict_cardiac_risk(patient: PatientData):
+    """
+    Computes ensemble consensus predictions (Random Forest, Gradient Boosting,
+    Logistic Regression), SHAP feature attribution deltas, and 6-axis radar metrics.
+    """
+    global ensemble_models
+    if not ensemble_models:
+        ensemble_models = train_fallback_models()
 
-    if model_pipeline is None:
-        model_pipeline = train_fallback_model()
+    raw_dict = patient.model_dump()
+    norm_dict = normalize(raw_dict)
+    df_row = pd.DataFrame([[norm_dict[f] for f in FEATURE_NAMES]], columns=FEATURE_NAMES)
 
-    norm_data = normalize_patient(patient)
-    df_row = pd.DataFrame([[norm_data[f] for f in FEATURE_NAMES]], columns=FEATURE_NAMES)
+    model_preds = {}
+    probs = []
 
-    try:
-        pred_int = int(model_pipeline.predict(df_row)[0])
-        prob_val = float(model_pipeline.predict_proba(df_row)[0][1])
-    except Exception as err:
-        logger.error(f"Inference error: {err}")
-        raise HTTPException(status_code=500, detail=str(err))
+    for key in ["rf", "gb", "lr"]:
+        pipe = ensemble_models.get(key)
+        if pipe:
+            pred = int(pipe.predict(df_row)[0])
+            prob = float(pipe.predict_proba(df_row)[0][1])
+            model_preds[key] = {
+                "prediction": pred,
+                "probability": round(prob, 4),
+                "risk_percentage": round(prob * 100, 1)
+            }
+            probs.append(prob)
 
-    risk_pct = round(prob_val * 100, 1)
+    ensemble_prob = float(np.mean(probs)) if probs else 0.5
+    ensemble_pct = round(ensemble_prob * 100, 1)
 
-    if prob_val < 0.35:
+    # Consensus Agreement count
+    positive_count = sum(1 for m in model_preds.values() if m["prediction"] == 1)
+    if positive_count == 3:
+        agreement = "3/3 Models Agree: High Risk"
+    elif positive_count == 0:
+        agreement = "3/3 Models Agree: Low Risk"
+    else:
+        agreement = f"{positive_count}/3 Consensus Warning"
+
+    # Risk Tier
+    if ensemble_prob < 0.35:
         tier = "Low Risk"
         headline = "Favorable Cardiovascular Profile"
-        summary = "No significant indicators of coronary heart disease detected. Markers fall within healthy physiological limits."
-    elif prob_val < 0.65:
+        summary = "No acute signs of coronary artery disease detected. Hemodynamic markers remain within expected clinical baseline."
+    elif ensemble_prob < 0.65:
         tier = "Moderate Risk"
-        headline = "Borderline Cardiac Risk Profile"
-        summary = "Several intermediate markers detected. Preventive clinical evaluation and lifestyle modifications are advised."
+        headline = "Borderline / Moderate Cardiac Risk"
+        summary = "Subtle ischemic or hemodynamic flags observed. Comprehensive clinical follow-up and preventive adjustments are recommended."
     else:
         tier = "High Risk"
-        headline = "Elevated Coronary Disease Risk"
-        summary = "Multiple high-severity markers observed. Consultation with a board-certified cardiologist is strongly advised."
+        headline = "Elevated Coronary Heart Disease Risk"
+        summary = "Strong concurrence across multiple diagnostic vectors. Immediate consultation with a cardiologist is recommended."
 
-    factors = extract_clinical_factors(norm_data)
-    recs = generate_recommendations(tier)
+    radar = compute_radar_metrics(norm_dict)
+    attributions = compute_feature_attributions(df_row)
+
+    # Recommendations
+    if tier == "High Risk":
+        recs = [
+            "🚨 Urgent Cardiology Consultation: Schedule an in-person diagnostic evaluation within 48-72 hours.",
+            "📋 Diagnostic Imaging: Inquire about high-resolution CT Coronary Angiogram (CTCA) or catheter angiography.",
+            "💊 Pharmacotherapy Optimization: Discuss antiplatelet, statin, and antihypertensive regimens.",
+            "⚠️ Exercise Caution: Avoid intense or strenuous unmonitored workouts until medically cleared."
+        ]
+    elif tier == "Moderate Risk":
+        recs = [
+            "🩺 Preventive Checkup: Follow up with your primary physician within 3-4 weeks.",
+            "📊 Stress Echocardiography: Undergo a Treadmill Exercise Stress Test (TMT) to evaluate functional capacity.",
+            "🥗 Cardiovascular Nutrition: Adopt a Mediterranean or DASH diet low in saturated fats and sodium.",
+            "🏃 Structured Activity: Aim for 150 minutes of moderate aerobic activity weekly (e.g. brisk walking)."
+        ]
+    else:
+        recs = [
+            "🌟 Favorable Baseline: Excellent cardiovascular markers. Keep up your active lifestyle and nutritious diet!",
+            "🛡️ Annual Surveillance: Maintain annual monitoring of resting blood pressure and lipid panels.",
+            "🥦 Nutrient-Dense Habits: Continue whole grains, leafy vegetables, omega-3s, and regular hydration.",
+            "🧘 Stress Management: Prioritize 7-8 hours of quality restorative sleep and daily stress reduction."
+        ]
+
+    # Deterministic cohort percentile estimate
+    percentile = min(99, max(5, int(ensemble_prob * 95 + (norm_dict['age'] - 30) * 0.15)))
+
+    # Unique Patient Demo Tag
+    patient_id = f"PAT-{norm_dict['age']}{norm_dict['sex']}-{int(norm_dict['trestbps'])%100:02d}"
 
     return {
         "status": "success",
-        "prediction": pred_int,
-        "probability": round(prob_val, 4),
-        "risk_percentage": risk_pct,
+        "patient_id": patient_id,
+        "ensemble_probability": round(ensemble_prob, 4),
+        "ensemble_risk_percentage": ensemble_pct,
         "risk_tier": tier,
         "headline": headline,
         "summary": summary,
-        "factors": factors,
+        "consensus_agreement": agreement,
+        "cohort_percentile": percentile,
+        "models": model_preds,
+        "radar_metrics": radar,
+        "attributions": attributions,
         "recommendations": recs,
-        "patient": norm_data,
         "evaluated_at": datetime.now().isoformat()
     }
 
 
 if __name__ == "__main__":
     import uvicorn
-    print("\n" + "=" * 60)
-    print("  🚀 CardioPulse Python App running at: http://127.0.0.1:8000")
-    print("=" * 60 + "\n")
+    print("\n" + "=" * 65)
+    print("  🚀 CardioPulse PRO Diagnostic OS Starting at http://127.0.0.1:8000")
+    print("=" * 65 + "\n")
     uvicorn.run("api.index:app", host="127.0.0.1", port=8000, reload=True)

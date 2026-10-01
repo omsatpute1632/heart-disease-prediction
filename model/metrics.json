@@ -1,6 +1,5 @@
 {
-  "best_model": "Random Forest",
-  "trained_at": "2026-10-01T11:41:49.646193",
+  "trained_at": "2026-10-01T12:09:23.337268",
   "dataset_rows": 303,
   "features": [
     "age",
@@ -17,40 +16,36 @@
     "ca",
     "thal"
   ],
-  "evaluation_metrics": {
-    "accuracy": 0.918,
-    "precision": 0.871,
-    "recall": 0.9643,
-    "f1_score": 0.9153,
-    "roc_auc": 0.9502,
-    "cv_auc_mean": 0.8853
-  },
-  "all_model_benchmarks": {
-    "Random Forest": {
+  "models": {
+    "rf": {
+      "name": "Random Forest",
       "accuracy": 0.918,
       "precision": 0.871,
       "recall": 0.9643,
       "f1_score": 0.9153,
       "roc_auc": 0.9502,
-      "cv_auc_mean": 0.8853
+      "cv_auc": 0.8853
     },
-    "Logistic Regression": {
-      "accuracy": 0.8689,
-      "precision": 0.8125,
-      "recall": 0.9286,
-      "f1_score": 0.8667,
-      "roc_auc": 0.9513,
-      "cv_auc_mean": 0.896
-    },
-    "Gradient Boosting": {
+    "gb": {
+      "name": "Gradient Boosting",
       "accuracy": 0.8361,
       "precision": 0.7647,
       "recall": 0.9286,
       "f1_score": 0.8387,
       "roc_auc": 0.9491,
-      "cv_auc_mean": 0.8516
+      "cv_auc": 0.8516
+    },
+    "lr": {
+      "name": "Logistic Regression",
+      "accuracy": 0.8689,
+      "precision": 0.8125,
+      "recall": 0.9286,
+      "f1_score": 0.8667,
+      "roc_auc": 0.9513,
+      "cv_auc": 0.896
     }
   },
+  "primary_model": "Random Forest Classifier",
   "feature_importances": {
     "thal": 0.1514,
     "cp": 0.1444,
@@ -65,5 +60,37 @@
     "sex": 0.0313,
     "restecg": 0.0164,
     "fbs": 0.0079
+  },
+  "population_baseline": {
+    "means": {
+      "age": 54.44,
+      "sex": 0.68,
+      "cp": 3.16,
+      "trestbps": 131.69,
+      "chol": 246.69,
+      "fbs": 0.15,
+      "restecg": 0.99,
+      "thalach": 149.61,
+      "exang": 0.33,
+      "oldpeak": 1.04,
+      "slope": 1.6,
+      "ca": 0.66,
+      "thal": 4.72
+    },
+    "stds": {
+      "age": 9.04,
+      "sex": 0.47,
+      "cp": 0.96,
+      "trestbps": 17.6,
+      "chol": 51.78,
+      "fbs": 0.36,
+      "restecg": 0.99,
+      "thalach": 22.88,
+      "exang": 0.47,
+      "oldpeak": 1.16,
+      "slope": 0.62,
+      "ca": 0.93,
+      "thal": 1.94
+    }
   }
 }

@@ -1,42 +1,50 @@
-# 🫀 CardioPulse AI — All-in-One Python Heart Disease Prediction Web App
+# 🫀 CardioPulse PRO — Next-Gen Cardiovascular Diagnostic OS
 
-A **100% Python** full-stack machine learning web application for **Cardiovascular Disease Risk Prediction**, trained on the authentic **UCI Cleveland Clinic `heart.csv` dataset** and optimized for **1-click deployment on Vercel Serverless Python**.
-
----
-
-## 🌟 Features
-
-- **100% Python Stack**: Both the interactive UI, API endpoints, and Machine Learning inference are driven entirely in Python ([`api/index.py`](file:///c:/Users/omsat/heart%20predict/api/index.py) & [`app.py`](file:///c:/Users/omsat/heart%20predict/app.py)).
-- **Zero Complex Static Builds**: No separate frontend build steps or complex asset routing.
-- **Self-Healing Serverless Architecture**: Loads the pre-trained Scikit-Learn pipeline from `model/heart_model.joblib` with an automated fallback trainer, ensuring zero cold-start failures on Vercel.
-- **Clinical Performance**:
-  - **Holdout Test Accuracy**: **91.80%**
-  - **ROC-AUC Score**: **95.02%**
-  - **Holdout F1 Score**: **91.53%**
-- **Modern Medical Dashboard**:
-  - Interactive clinical parameter controls (sliders, synced inputs, pill radios)
-  - 1-Click Instant Demo Presets (Healthy Adult, Borderline, High Risk)
-  - SVG Radial Risk Gauge with dynamic animated color fill (Emerald &rarr; Amber &rarr; Crimson)
-  - Detailed breakdown of contributing clinical risk factors and tailored medical guidance
+A **Full-Stack 100% Python** Machine Learning Diagnostic Operating System for **Heart Disease Risk Prediction & Hemodynamic Stratification**, trained on the authentic **UCI Cleveland Clinic dataset (`heart.csv`)** and built for zero-configuration deployment to **Vercel Serverless Python**.
 
 ---
 
-## 📁 Project Structure
+## 🌟 What's New & Advanced
+
+- 📈 **Real-Time 60FPS Canvas ECG Oscilloscope**: Live animated P-Q-R-S-T cardiac waveform running continuously across the header HUD. Synchronized dynamically with the patient's heart rate (`thalach`) input!
+- 🔊 **Synthesized Cardiac Audio Pulse**: Real-time auditory heartbeat beep powered by the browser Web Audio API synthesizer (muteable toggle).
+- 🤖 **Multi-Model Consensus Ensemble**:
+  - 🌲 **Random Forest Classifier** (150 Ensembled Trees, 91.8% holdout accuracy)
+  - ⚡ **Gradient Boosting Classifier** (100 Iterative Residual Trees, 94.9% ROC-AUC)
+  - 📐 **Logistic Regression** (Calibrated Linear Classifier, 95.1% ROC-AUC)
+  - Visual agreement meter (`3/3 Models Agree: High Confidence`).
+- 📊 **Explainable AI (SHAP-Style Attribution Waterfall)**:
+  - Explains the model's decision by breaking down which clinical biomarkers increased risk (e.g. `+38.5% from 2 occluded vessels`) and which provided protective effects (e.g. `-21.8% from optimal lipids`).
+- 🕸️ **Dynamic 6-Axis Cardiac Stress Radar Polygon**:
+  - Plots patient risk geometry across 6 physiological dimensions against a healthy median cohort baseline:
+    1. Blood Pressure
+    2. Lipid Profile
+    3. Ischemic ST Strain
+    4. Fluoroscopy Occlusions
+    5. Perfusion Defect
+    6. Exertional Cardiac Reserve
+- 🖨️ **Clinical PDF / Print Export**: Formatted with official Cardiology Assessment Report headers, patient IDs, cohort percentiles, and physician signature block.
+- ⚡ **100% Python Architecture for Vercel**: Everything is self-contained in Python (`api/index.py` & `app.py`) with zero npm builds or static routing conflicts.
+
+---
+
+## 📁 File Structure
 
 ```text
 heart-predict/
 ├── api/
-│   └── index.py            # Complete All-in-One Python App (UI + API + ML inference)
+│   └── index.py            # Complete All-in-One Python Web OS (UI + Multi-Model API + XAI)
 ├── data/
 │   └── heart.csv           # Authentic UCI Cleveland Clinic dataset (303 patient records)
 ├── model/
-│   ├── heart_model.joblib  # Pre-trained Scikit-Learn Random Forest pipeline
-│   └── metrics.json        # Accuracy, ROC-AUC, and feature rankings
+│   ├── ensemble_models.joblib # Serialized Multi-Model Ensemble (RF, GB, LR)
+│   ├── heart_model.joblib  # Primary Random Forest pipeline
+│   └── metrics.json        # Evaluation benchmarks & feature importances
 ├── scripts/
-│   └── train.py            # Full evaluation and model training script
+│   └── train.py            # Advanced multi-model training script
 ├── app.py                  # Local Python runner (run: python app.py)
 ├── requirements.txt        # Pinned lightweight dependencies for Vercel
-├── vercel.json             # Rewrites all routes directly to the Python entrypoint
+├── vercel.json             # Direct Vercel rewrite routing all traffic to Python
 ├── .gitignore              # Standard git ignore patterns
 └── README.md               # Documentation
 ```
@@ -46,58 +54,53 @@ heart-predict/
 ## 🚀 Running Locally (1 Command)
 
 ```bash
-# 1. Install requirements
+# 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Start the all-in-one Python app
+# 2. Run the Python application
 python app.py
 ```
 
-Open **[http://127.0.0.1:8000](http://127.0.0.1:8000)** in your browser!
-
-*(You can also view automatic Swagger API docs at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs))*
+- Open **[http://127.0.0.1:8000](http://127.0.0.1:8000)** in your browser!
+- Interactive Swagger API docs: **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**.
 
 ---
 
 ## ☁️ Deploying to Vercel
 
-Because everything is in Python and [`vercel.json`](file:///c:/Users/omsat/heart%20predict/vercel.json) routes all requests to `api/index.py`, deployment takes less than 2 minutes.
+The app is pre-configured for Vercel with [`vercel.json`](file:///c:/Users/omsat/heart%20predict/vercel.json).
 
-### Method 1: Deploy via GitHub (Recommended)
-
-1. Push this folder to a GitHub repository:
+### Option 1: Via GitHub (Recommended)
+1. Commit and push your changes:
    ```bash
-   git init
    git add .
-   git commit -m "feat: All-in-one Python Heart Disease Prediction app"
-   git branch -M main
-   git remote add origin https://github.com/<YOUR_USERNAME>/<YOUR_REPO_NAME>.git
-   git push -u origin main
+   git commit -m "feat: Upgrade to CardioPulse PRO with Live ECG and Multi-Model Ensemble"
+   git push origin main
    ```
+2. In your [Vercel Dashboard](https://vercel.com), import the repository and click **Deploy**.
 
-2. Open [vercel.com](https://vercel.com) and log in.
-3. Click **"Add New..."** &rarr; **"Project"** and select your GitHub repo.
-4. Click **"Deploy"** (Vercel automatically detects `vercel.json` and `requirements.txt`).
-
-### Method 2: Deploy via Vercel CLI
-
+### Option 2: Via Vercel CLI
 ```bash
-npm install -g vercel
 vercel
 ```
-
-Follow the prompts; Vercel will immediately deploy your Python application and generate your live production URL (e.g. `https://cardiopulse-ai.vercel.app`).
 
 ---
 
 ## 🔌 API Endpoints
 
-- **`GET /`**: Returns the complete interactive web dashboard.
-- **`POST /api/predict`** (or **`POST /predict`**): Evaluates patient data and returns disease probability, risk tier, contributing biomarkers, and recommendations.
-- **`GET /api/health`**: Returns system health status and model availability.
+- **`GET /`**: Renders the complete CardioPulse PRO Web OS.
+- **`POST /api/predict`**: Evaluates patient data and returns:
+  - `ensemble_probability` & `ensemble_risk_percentage`
+  - `consensus_agreement` (`3/3 Models Agree`)
+  - `models` breakdown (`rf`, `gb`, `lr`)
+  - `radar_metrics` (6 dimensions)
+  - `attributions` (SHAP-style directional feature impacts)
+  - `cohort_percentile`
+  - `recommendations` checklist
+- **`GET /api/health`**: Returns system status and loaded models.
 
 ---
 
 ## ⚕️ Medical Disclaimer
 
-*This application is created for educational, triage demonstration, and screening purposes. Machine learning probability scores do not replace professional clinical judgment. Always consult a certified medical doctor or cardiologist for diagnostic evaluations and medical treatment.*
+*This application is created for demonstration, educational, and triage screening purposes. Machine learning probability scores do not replace professional clinical judgment. Always consult a certified cardiologist for official diagnostic evaluations and treatment.*
